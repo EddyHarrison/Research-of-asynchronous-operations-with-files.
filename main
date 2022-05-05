@@ -1,0 +1,196 @@
+#include <iostream>
+#include <chrono>
+#include <windows.h>
+
+using std::chrono::high_resolution_clock;
+using std::chrono::duration_cast;
+using std::chrono::microseconds;
+using std::chrono::nanoseconds;
+
+const int bytes[] = { 512, 1024, 2048, 4096 };
+
+HANDLE hTextFile;
+
+high_resolution_clock::time_point end_write;
+
+char* generate_data(std::size_t generate_byte)
+{
+    std::size_t length_array = generate_byte / 2;
+
+    char* result_string = new char[length_array + 1];
+
+    memset(result_string, 'A', length_array * sizeof(char));
+    result_string[length_array] = '\0';
+
+    return result_string;
+}
+
+void somefunc()
+{
+    Sleep(1);
+
+
+    
+}
+
+void sync_write(std::size_t generate_byte)
+{
+    DWORD bytesWritten;
+
+    char path_file[] = "text1.txt";
+
+    char* text = generate_data(generate_byte);
+
+    hTextFile = CreateFile(
+        path_file,
+        GENERIC_WRITE, // способ доступа
+        0, // режим совместного использования 
+        NULL, // атрибут защит
+        OPEN_ALWAYS, // создание или открытие файла 
+        0, // флаги и атрибуты 
+        NULL    //файл атрибутов 
+    );
+
+    if (hTextFile == INVALID_HANDLE_VALUE)
+    {
+        std::cout << "Создание файла неуспешно" << std::endl;
+        std::cout << "Код последней ошибки: " << GetLastError() << std::endl;
+        return;
+    }
+
+    bool was_write = WriteFile(
+        hTextFile, // дескриптор анонимного канала
+        text, //буффер данных 
+        generate_byte / 2 + 1, //кол-во байт для записи 
+        &bytesWritten, // кол-во записанных байтов
+        NULL // ассинхронный ввод
+    );
+
+    if (!was_write)
+    {
+        std::cout << "Запись файла не успешно" << std::endl;
+        std::cout << "Код последней ошибки: " << GetLastError() << std::endl;
+        std::cout << "Байт записано: " << bytesWritten << std::endl;
+        return;
+    }
+}
+
+VOID CALLBACK completion_end_write(
+    DWORD dwErrorCode,  // код возврата 
+    DWORD dwNumberOfBytesTransferred, //количество переданных байтов
+    LPOVERLAPPED lpOverlapped // асинхронная передача данных
+)
+{
+    end_write = high_resolution_clock::now(); // подсчет времени окончания записи 
+}
+
+void async_write(std::size_t generate_byte)
+{
+    OVERLAPPED ol; // структура для ассинхронной записи
+
+    char path_file[] = "text2.txt";
+
+    char* text = generate_data(generate_byte);
+
+    ol.Offset = 0; // сдвиг нижний 
+    ol.OffsetHigh = 0; //сдвиг вверхний
+
+    hTextFile = CreateFile(
+        path_file,
+        GENERIC_WRITE,  // способ доступа
+        0,  // режим совместного использования 
+        NULL,   // атрибут защит
+        OPEN_ALWAYS,    // создание или открытие файла 
+        FILE_FLAG_OVERLAPPED,   // флаги и атрибуты 
+        NULL    //файл атрибутов 
+    );
+
+    if (hTextFile == INVALID_HANDLE_VALUE) //не правильный указатель на файл 
+    {
+        std::cout << "Создание файло неуспешно" << std::endl;
+        std::cout << "Код последней ошибки: " << GetLastError() << std::endl;
+        return;
+    }
+
+    bool was_write = WriteFileEx(
+        hTextFile,  // дескриптор анонимного канала
+        text, //буффер данных 
+        generate_byte / 2 + 1, //кол-во байт для записи 
+        &ol, // кол-во записанных байтов
+        &completion_end_write // ассинхронный ввод
+    );
+
+    if (!was_write)
+    {
+        if (GetLastError() == ERROR_IO_PENDING) // ошибка ожидания
+        {
+            std::cout << "ожидается запись" << std::endl;
+        }
+        else
+        {
+            std::cout << "Запись прошла неуспешно" << std::endl;
+            std::cout << "Код последней ошибки: " << GetLastError() << std::endl;
+        }
+
+        return;
+    }
+}
+
+void testing_sync_write(std::size_t generate_byte) 
+{
+    high_resolution_clock::time_point start = high_resolution_clock::now();
+    sync_write(generate_byte);
+    somefunc();
+    high_resolution_clock::time_point end = high_resolution_clock::now();
+
+    CloseHandle(hTextFile);
+
+    std::cout << "Время записи в синхронном режиме" << std::endl
+        << "Байт записано:          " << generate_byte << std::endl
+        << "Время окончания всего тестирования :       " << duration_cast<nanoseconds>(end - start).count() << "[ns] или "
+        << duration_cast<microseconds>(end - start).count() << "[microsec]" << std::endl
+        << std::endl;
+}
+
+void testing_async_write(std::size_t generate_byte)
+{
+    high_resolution_clock::time_point start = high_resolution_clock::now();
+    async_write(generate_byte);
+    somefunc();
+    high_resolution_clock::time_point end_program = high_resolution_clock::now();
+
+    SleepEx(INFINITE, TRUE); // ждет пока произойдет вызов ассинхронной процедуры 
+    high_resolution_clock::time_point end_testing = high_resolution_clock::now();
+
+    CloseHandle(hTextFile);
+
+    std::cout << "Время записи в асинхронном режиме" << std::endl
+        << "Байт записано:          " << generate_byte << std::endl
+        << "Время записи:           " << duration_cast<nanoseconds>(end_write - start).count() << "[ns] or "
+        << duration_cast<microseconds>(end_write - start).count() << "[microsec]" << std::endl
+        << "Время программы: " << duration_cast<nanoseconds>(end_program - start).count() << "[ns] or "
+        << duration_cast<microseconds>(end_program - start).count() << "[microsec]" << std::endl
+        << "Время окончания всего тестирования :       " << duration_cast<nanoseconds>(end_testing - start).count() << "[ns] or "
+        << duration_cast<microseconds>(end_testing - start).count() << "[microsec]" << std::endl
+        << std::endl;
+}
+
+void testing()
+{
+    std::size_t length_bytes = sizeof(bytes) / sizeof(int);
+
+    for (std::size_t index = 0; index < length_bytes; index++)
+    {
+        testing_sync_write(bytes[index]);
+        testing_async_write(bytes[index]);
+    }
+}
+
+int main()
+{
+    setlocale(LC_ALL, "Russian");
+
+    testing();
+
+    return 0;
+}
